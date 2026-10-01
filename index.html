@@ -40,8 +40,8 @@
 
     <h2>🚨 System Control Center</h2>
     <!-- BUKTI INDIKATOR VERSI & TANGGAL BUILD -->
-    <div class="version-badge">App Version: v1.0.3 (BLE Chunking Fixed)</div>
-    <div class="build-time">Last Updated: 01 Okt 2026 - 16:15 WIB</div>
+    <div class="version-badge">App Version: v1.0.4 (BLE Chunking Fixed)</div>
+    <div class="build-time">Last Updated: 01 Okt 2026 - 18:55 WIB</div>
 
     <!-- Section 1: Setup Wi-Fi via Bluetooth -->
     <div class="card">
@@ -157,3 +157,10 @@
     </script>
 </body>
 </html>
+
+
+if ('serviceWorker' in navigator && 'PushManager' in window) {
+    navigator.serviceWorker.register('/sw.js').then(function(reg) {
+        console.log('Service Worker Registered!', reg);
+    });
+}
