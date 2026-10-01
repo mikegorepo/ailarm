@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistem Deteksi Maling ESP32</title>
+    <link rel="manifest" href="data:application/json,{'name':'AntiMalingPWA','short_name':'AntiMaling','start_url':'.','display':'standalone'}">
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #121212; color: #fff; text-align: center; padding: 20px; }
+        .card { background: #1e1e1e; border-radius: 12px; padding: 20px; margin: 15px auto; max-width: 400px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
+        button { width: 100%; padding: 12px; margin: 8px 0; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 16px; }
+        .btn-ble { background: #007bff; color: white; }
+        .btn-adapt { background: #ffc107; color: black; }
+        .btn-on { background: #28a745; color: white; }
+        .btn-off { background: #dc3545; color: white; }
+        input { width: 90%; padding: 10px; margin: 6px 0; border-radius: 6px; border: 1px solid #333; background: #2a2a2a; color: white; }
+        .status { margin-top: 10px; font-weight: bold; color: #17a2b8; }
+    </style>
+</head>
+<body>
+
+    <h2>🚨 System Control Center</h2>
+
+    <!-- Section 1: Setup Wi-Fi via Bluetooth -->
+    <div class="card">
+        <h3>1. Setup Wi-Fi ESP32</h3>
+        <input type="text" id="ssid" placeholder="Nama Wi-Fi (SSID)">
+        <input type="password" id="password" placeholder="Password Wi-Fi">
+        <button class="btn-ble" onclick="connectBLE()">Kirim via Bluetooth</button>
+        <div id="ble-status" class="status">BLE Disconnected</div>
+    </div>
+
+    <!-- Section 2: Adaptasi & Training Model -->
+    <div class="card">
+        <h3>2. Model & Adaptasi</h3>
+        <p>Kumpulkan sampel data lingkungan untuk penyesuaian threshold otomatis.</p>
+        <button class="btn-adapt" onclick="sendCommand('ADAPT')">🔄 Adaptasi Data & Train</button>
+    </div>
+
+    <!-- Section 3: Monitoring / Alarm Switch -->
+    <div class="card">
+        <h3>3. Status Keamanan</h3>
+        <button class="btn-on" onclick="sendCommand('START')">🛡️ Nyalakan Sistem</button>
+        <button class="btn-off" onclick="sendCommand('STOP')">🛑 Matikan Sistem</button>
+        <div id="system-status" class="status">Status: IDLE</div>
+    </div>
+
+    <script>
+        const SERVER_URL = "http://192.168.1.100:5000"; // Sesuaikan dengan IP Server Dummy Anda
+        const BLE_SVC_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+        const BLE_RX_UUID  = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+
+        // Minta Izin Notifikasi Browser saat PWA dibuka
+        if ('Notification' in window) {
+            Notification.requestPermission();
+        }
+
+        // Web Bluetooth API untuk mengirimkan Kredensial Wi-Fi ke ESP32
+        async function connectBLE() {
+            const ssid = document.getElementById('ssid').value;
+            const password = document.getElementById('password').value;
+            const statusDiv = document.getElementById('ble-status');
+
+            if (!ssid) return alert("Isi SSID Wi-Fi terlebih dahulu!");
+
+            try {
+                statusDiv.innerText = "Mencari ESP32...";
+                const device = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: 'ESP32_Maling_Detector' }],
+                    optionalServices: [BLE_SVC_UUID]
+                });
+
+                statusDiv.innerText = "Menghubungkan BLE...";
+                const server = await device.gatt.connect();
+                const service = await server.getPrimaryService(BLE_SVC_UUID);
+                const rxChar = await service.getCharacteristic(BLE_RX_UUID);
+
+                const payload = JSON.stringify({ ssid: ssid, pass: password });
+                await rxChar.writeValue(new TextEncoder().encode(payload));
+
+                statusDiv.innerText = "✅ Kredensial Wi-Fi Terkirim!";
+            } catch (err) {
+                console.error(err);
+                statusDiv.innerText = "❌ Gagal koneksi BLE";
+            }
+        }
+
+        // Mengirimkan Perintah ke Server Dummy (yang nanti diteruskan / dipoll oleh ESP32)
+        async function sendCommand(cmd) {
+            try {
+                await fetch(`${SERVER_URL}/api/set_command`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ command: cmd })
+                });
+                document.getElementById('system-status').innerText = `Status: ${cmd}`;
+            } catch (err) {
+                alert("Gagal terhubung ke Server HTTP");
+            }
+        }
+
+        // Long-polling untuk menerima Alert Notifikasi dari Server ke PWA secara Real-time
+        async function pollAlerts() {
+            try {
+                const res = await fetch(`${SERVER_URL}/api/get_latest_alert`);
+                const data = await res.json();
+                if (data.alert) {
+                    showNotification("🚨 BAHAYA: MALING TERDETEKSI!", `Frekuensi: ${data.freq}Hz | Vpp: ${data.v_pp}V`);
+                }
+            } catch (e) {}
+            setTimeout(pollAlerts, 3000);
+        }
+
+        function showNotification(title, body) {
+            if (Notification.permission === 'granted') {
+                new Notification(title, { body: body, icon: 'https://via.placeholder.com/128/ff0000/ffffff?text=ALERT' });
+            }
+        }
+
+        // Mulai polling alert saat PWA aktif
+        pollAlerts();
+    </script>
+</body>
+</html>
