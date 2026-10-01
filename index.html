@@ -59,40 +59,45 @@
         }
 
         async function connectBLE() {
-    const ssid = document.getElementById('ssid').value.trim();
-    const password = document.getElementById('password').value.trim();
-    const statusDiv = document.getElementById('ble-status');
-
-    if (!ssid) return alert("Isi SSID Wi-Fi terlebih dahulu!");
-
-    try {
-        statusDiv.innerText = "Mencari ESP32...";
-        const device = await navigator.bluetooth.requestDevice({
-            filters: [{ name: 'ESP32_Maling_Detector' }],
-            optionalServices: [BLE_SVC_UUID]
-        });
-
-        statusDiv.innerText = "Menghubungkan BLE...";
-        const server = await device.gatt.connect();
-        const service = await server.getPrimaryService(BLE_SVC_UUID);
-        const rxChar = await service.getCharacteristic(BLE_RX_UUID);
-
-        // Buat JSON string yang ringkas
-        const payload = JSON.stringify({ ssid: ssid, pass: password });
+            const ssid = document.getElementById('ssid').value.trim();
+            const password = document.getElementById('password').value.trim();
+            const statusDiv = document.getElementById('ble-status');
         
-        console.log("Mengirim Payload:", payload);
-        statusDiv.innerText = "Mengirim Kredensial...";
-
-        // Kirim data sebagai Uint8Array
-        const encoder = new TextEncoder();
-        await rxChar.writeValue(encoder.encode(payload));
-
-        statusDiv.innerText = "✅ Kredensial Wi-Fi Terkirim!";
-    } catch (err) {
-        console.error("BLE Error:", err);
-        statusDiv.innerText = "❌ Gagal koneksi BLE";
-    }
-}
+            if (!ssid) return alert("Isi SSID Wi-Fi terlebih dahulu!");
+        
+            try {
+                statusDiv.innerText = "Mencari ESP32...";
+                const device = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: 'ESP32_Maling_Detector' }],
+                    optionalServices: [BLE_SVC_UUID]
+                });
+        
+                statusDiv.innerText = "Menghubungkan BLE...";
+                const server = await device.gatt.connect();
+                const service = await server.getPrimaryService(BLE_SVC_UUID);
+                const rxChar = await service.getCharacteristic(BLE_RX_UUID);
+        
+                const payload = JSON.stringify({ ssid: ssid, pass: password });
+                statusDiv.innerText = "Mengirim Kredensial...";
+        
+                // Pengiriman Data Berbertahap (Chunking 15 Byte/Paket)
+                const CHUNK_SIZE = 15;
+                const encoder = new TextEncoder();
+                const dataBytes = encoder.encode(payload);
+        
+                for (let i = 0; i < dataBytes.length; i += CHUNK_SIZE) {
+                    const chunk = dataBytes.slice(i, i + CHUNK_SIZE);
+                    await rxChar.writeValue(chunk);
+                    // Delay singkat 50ms antar-paket agar ESP32 sempat memproses
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                }
+        
+                statusDiv.innerText = "✅ Kredensial Wi-Fi Terkirim!";
+            } catch (err) {
+                console.error("BLE Error:", err);
+                statusDiv.innerText = "❌ Gagal koneksi BLE";
+            }
+        }
 
         async function sendCommand(cmd) {
             try {
