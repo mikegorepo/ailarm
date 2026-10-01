@@ -3,202 +3,241 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ESP32 Security Center</title>
+    <title>ESP32 Security Center Debug</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #121212; color: #fff; text-align: center; padding: 20px; }
-        .card { background: #1e1e1e; border-radius: 12px; padding: 20px; margin: 15px auto; max-width: 400px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); }
+        .card { background: #1e1e1e; border-radius: 12px; padding: 20px; margin: 15px auto; max-width: 450px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); text-align: left; }
+        h2, h3 { text-align: center; margin-top: 5px; }
         button { width: 100%; padding: 12px; margin: 8px 0; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 15px; }
-        .btn-ble { background: #007bff; color: white; }
-        .btn-reconnect { background: #17a2b8; color: white; }
         .btn-sub { background: #28a745; color: white; }
         .btn-unsub { background: #6c757d; color: white; }
-        .btn-adapt { background: #ffc107; color: black; }
-        .btn-start { background: #28a745; color: white; }
-        .btn-stop { background: #dc3545; color: white; }
-        input { width: 90%; padding: 10px; margin: 6px 0; border-radius: 6px; border: 1px solid #333; background: #2a2a2a; color: white; }
-        .status { margin-top: 10px; font-weight: bold; color: #17a2b8; font-size: 14px; }
-        .badge { display: inline-block; background: #28a745; color: #fff; font-size: 11px; padding: 4px 8px; border-radius: 10px; margin-bottom: 10px; }
+        .btn-test { background: #17a2b8; color: white; }
+        .status { margin-top: 10px; font-weight: bold; color: #17a2b8; font-size: 14px; text-align: center; }
+        
+        /* Box Terminal Debug Log */
+        #log-box { 
+            background: #000; 
+            color: #00ff00; 
+            font-family: 'Courier New', Courier, monospace; 
+            padding: 12px; 
+            border-radius: 8px; 
+            max-height: 250px; 
+            overflow-y: auto; 
+            font-size: 12px; 
+            white-space: pre-wrap;
+            border: 1px solid #333;
+            margin-top: 15px;
+        }
+        .log-err { color: #ff4d4d; }
+        .log-succ { color: #5cdb95; }
+        .log-warn { color: #ffcc00; }
     </style>
 </head>
 <body>
 
-    <h2>🚨 ESP32 Security Center</h2>
-    <div class="badge">App Version: v2.0 (Push Sub + BLE Chunk)</div>
+    <h2>🚨 ESP32 Security Center Debug</h2>
 
-    <!-- Section 1: Push Notification Subscription -->
     <div class="card">
         <h3>🔔 Target Device Notification</h3>
-        <button class="btn-sub" onclick="subscribePush()">🔔 Subscribe Notifikasi HP Ini</button>
-        <button class="btn-unsub" onclick="unsubscribePush()">🔕 Unsubscribe Notifikasi HP Ini</button>
-        <div id="push-status" class="status">Status Push: Belum Terdaftar</div>
+        <button class="btn-sub" onclick="subscribePush()">🔔 Subscribe Notifikasi Device Ini</button>
+        <button class="btn-unsub" onclick="unsubscribePush()">🔕 Unsubscribe Notifikasi Device Ini</button>
+        <button class="btn-test" onclick="checkEnvironment()">🔍 Cek Environment / Fitur Browser</button>
+        <div id="push-status" class="status">Status Push: Ready for Debugging</div>
     </div>
 
-    <!-- Section 2: Bluetooth Setup -->
+    <!-- Live Console Debug Box -->
     <div class="card">
-        <h3>📶 Bluetooth Setup Wi-Fi</h3>
-        <input type="text" id="ssid" placeholder="Nama Wi-Fi (SSID)">
-        <input type="password" id="password" placeholder="Password Wi-Fi">
-        <button class="btn-ble" onclick="connectBLE()">📡 Hubungkan & Kirim Wi-Fi</button>
-        <button class="btn-reconnect" onclick="connectBLE()">🔄 Reconnect BLE</button>
-        <div id="ble-status" class="status">BLE Disconnected</div>
-    </div>
-
-    <!-- Section 3: Adaptation & Control -->
-    <div class="card">
-        <h3>🛡️ Kontrol Monitoring</h3>
-        <button class="btn-adapt" onclick="sendCommand('ADAPT')">🔄 Adaptasi Data & Train Model</button>
-        <button class="btn-start" onclick="sendCommand('START')">🛡️ Nyalakan Sistem</button>
-        <button class="btn-stop" onclick="sendCommand('STOP')">🛑 Matikan Sistem</button>
-        <div id="system-status" class="status">Status: IDLE</div>
+        <h3>📜 Live Console Log</h3>
+        <button style="background:#444; color:#fff; padding:6px; font-size:12px;" onclick="clearLog()">Clear Log</button>
+        <div id="log-box">▶ Status Log Aktif. Klik "Subscribe" untuk mulai debug...\n</div>
     </div>
 
     <script>
         const SERVER_URL = "https://uninured-centrifugally-marjorie.ngrok-free.app";
-        const BLE_SVC_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-        const BLE_RX_UUID  = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
-
         const NGROK_HEADERS = {
             'Content-Type': 'application/json',
             'ngrok-skip-browser-warning': 'true'
         };
 
-        let currentSubscription = null;
+        // --- CUSTOM LOGGER SYSTEM ---
+        function log(msg, type = 'info') {
+            const logBox = document.getElementById('log-box');
+            const time = new Date().toLocaleTimeString();
+            let prefix = "ℹ️ [INFO]";
+            let cssClass = "";
 
-        // --- PUSH NOTIFICATION HANDLERS ---
+            if (type === 'error') { prefix = "❌ [ERROR]"; cssClass = "log-err"; }
+            if (type === 'success') { prefix = "✅ [SUCCESS]"; cssClass = "log-succ"; }
+            if (type === 'warn') { prefix = "⚠️ [WARN]"; cssClass = "log-warn"; }
+
+            const formattedMsg = `[${time}] ${prefix} ${msg}\n`;
+            console.log(formattedMsg);
+            
+            logBox.innerHTML += `<span class="${cssClass}">${formattedMsg}</span>`;
+            logBox.scrollTop = logBox.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('log-box').innerHTML = "▶ Log cleared.\n";
+        }
+
+        // --- CHECK ENVIRONMENT ---
+        function checkEnvironment() {
+            log("Memeriksa fitur browser...");
+            log(`Location Protocol: ${window.location.protocol}`);
+            log(`Is Secure Context (HTTPS): ${window.isSecureContext}`);
+            log(`ServiceWorker Support: ${'serviceWorker' in navigator}`);
+            log(`PushManager Support: ${'PushManager' in window}`);
+            log(`Notification Support: ${'Notification' in window}`);
+            
+            if ('Notification' in window) {
+                log(`Permission Notifikasi Saat Ini: ${Notification.permission}`, Notification.permission === 'granted' ? 'success' : 'warn');
+            }
+        }
+
+        // --- SUBSCRIBE PUSH FUNCTION ---
         async function subscribePush() {
             const statusDiv = document.getElementById('push-status');
+            log("--- PROSES SUBSCRIBE DIMULAI ---");
+
             try {
-                if (!('serviceWorker' in navigator)) return alert("Browser tidak mendukung Service Worker");
-                
-                const reg = await navigator.serviceWorker.ready;
+                // Step 1: Cek Dukungan Browser
+                if (!('serviceWorker' in navigator)) {
+                    throw new Error("Browser ini TIDAK mendukung Service Worker!");
+                }
+                if (!('PushManager' in window)) {
+                    throw new Error("Browser ini TIDAK mendukung Push API!");
+                }
+
+                // Step 2: Cek & Minta Izin Notifikasi
+                log("Meminta izin Notifikasi dari pengguna...");
                 const perm = await Notification.requestPermission();
-                if (perm !== 'granted') return alert("Izin notifikasi ditolak!");
+                log(`Izin Notifikasi Diberikan: ${perm}`, perm === 'granted' ? 'success' : 'warn');
 
-                // Ambil VAPID Public Key dari Server
+                if (perm !== 'granted') {
+                    throw new Error("Izin Notifikasi ditolak oleh pengguna atau di-block browser.");
+                }
+
+                // Step 3: Register / Check Service Worker
+                log("Menunggu Service Worker Siap (navigator.serviceWorker.ready)...");
+                
+                // Set Timeout 5 Detik untuk mendeteksi SW yang menggantung (stuck)
+                const swTimeout = new Promise((_, reject) => 
+                    setTimeout(() => reject(new Error("Timeout: Service Worker tidak kunjung 'ready'. Apakah file 'sw.js' terdaftar dan aktif?")), 5000)
+                );
+
+                const reg = await Promise.race([navigator.serviceWorker.ready, swTimeout]);
+                log(`Service Worker Siap! Active Scope: ${reg.scope}`, 'success');
+
+                // Step 4: Fetch VAPID Public Key dari Server
+                log(`Fetching VAPID Public Key dari: ${SERVER_URL}/api/vapid_public_key`);
                 const keyRes = await fetch(`${SERVER_URL}/api/vapid_public_key`, { headers: NGROK_HEADERS });
-                const keyData = await keyRes.json();
+                
+                if (!keyRes.ok) {
+                    throw new Error(`Server merespon HTTP Error Status: ${keyRes.status}`);
+                }
 
+                const keyData = await keyRes.json();
+                log(`VAPID Public Key Diterima: ${keyData.public_key ? keyData.public_key.substring(0, 15) + '...' : 'NULL'}`, 'success');
+
+                if (!keyData.public_key) {
+                    throw new Error("Server mengirim JSON tetapi key 'public_key' kosong/null!");
+                }
+
+                // Step 5: Convert Base64 Key ke Uint8Array
+                log("Mengonversi VAPID Key ke Uint8Array...");
+                const convertedKey = urlBase64ToUint8Array(keyData.public_key);
+                log(`Key Berhasil Di-convert! Array Length: ${convertedKey.length} bytes`, 'success');
+
+                // Step 6: Subscribe via PushManager
+                log("Memanggil reg.pushManager.subscribe()...");
+                
                 let sub = await reg.pushManager.getSubscription();
-                if (!sub) {
+                if (sub) {
+                    log("Device sudah terdaftar sebelumnya di browser ini.", 'warn');
+                } else {
                     sub = await reg.pushManager.subscribe({
                         userVisibleOnly: true,
-                        applicationServerKey: urlBase64ToUint8Array(keyData.public_key)
+                        applicationServerKey: convertedKey
                     });
+                    log("Push Subscription Baru Berhasil Dibuat oleh Browser!", 'success');
                 }
-                currentSubscription = sub;
 
-                // Kirim Subscription ke Server
-                await fetch(`${SERVER_URL}/api/subscribe`, {
+                // Step 7: Kirim Data Subscription ke Server Python
+                log("Mengirim data Subscription ke Server (/api/subscribe)...");
+                const subRes = await fetch(`${SERVER_URL}/api/subscribe`, {
                     method: 'POST',
                     headers: NGROK_HEADERS,
                     body: JSON.stringify(sub)
                 });
 
-                statusDiv.innerText = "✅ HP Ini Berhasil Terdaftar (Subscribed)!";
+                const subResData = await subRes.json();
+                log(`Respon Server: ${JSON.stringify(subResData)}`, 'success');
+
+                statusDiv.innerText = "✅ HP/Device Berhasil Terdaftar (Subscribed)!";
                 statusDiv.style.color = "#28a745";
+                log("--- PROSES SUBSCRIBE SELESAI DENGAN SUKSES ---", 'success');
+
             } catch (err) {
-                console.error("Gagal Subscribe:", err);
-                statusDiv.innerText = "❌ Gagal Subscribe Notifikasi";
+                log(`ALUR TERHENTI: ${err.message}`, 'error');
+                if (err.stack) console.error("Stack Trace:", err.stack);
+                
+                statusDiv.innerText = `❌ Gagal: ${err.message}`;
                 statusDiv.style.color = "#dc3545";
             }
         }
 
+        // --- UNSUBSCRIBE PUSH FUNCTION ---
         async function unsubscribePush() {
             const statusDiv = document.getElementById('push-status');
+            log("--- PROSES UNSUBSCRIBE DIMULAI ---");
+
             try {
                 const reg = await navigator.serviceWorker.ready;
                 const sub = await reg.pushManager.getSubscription();
+                
                 if (sub) {
+                    log("Mengirim permintaan hapus subscription ke Server...");
                     await fetch(`${SERVER_URL}/api/unsubscribe`, {
                         method: 'POST',
                         headers: NGROK_HEADERS,
                         body: JSON.stringify(sub)
                     });
+
+                    log("Membatalkan subscription di Browser...");
                     await sub.unsubscribe();
+                    log("Subscription berhasil dibatalkan!", 'success');
+                } else {
+                    log("Tidak ada subscription aktif untuk dibatalkan.", 'warn');
                 }
-                currentSubscription = null;
-                statusDiv.innerText = "🔕 HP Ini Berhasil Unsubscribe!";
+
+                statusDiv.innerText = "🔕 Device Berhasil Unsubscribe!";
                 statusDiv.style.color = "#6c757d";
             } catch (err) {
-                console.error("Gagal Unsubscribe:", err);
+                log(`Unsubscribe Error: ${err.message}`, 'error');
             }
         }
 
+        // --- HELPER CONVERTER BASE64 TO UINT8ARRAY ---
         function urlBase64ToUint8Array(base64String) {
-            const padding = '='.repeat((4 - base64String.length % 4) % 4);
-            const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
-            const rawData = window.atob(base64);
-            const outputArray = new Uint8Array(rawData.length);
-            for (let i = 0; i < rawData.length; ++i) {
-                outputArray[i] = rawData.charCodeAt(i);
-            }
-            return outputArray;
-        }
-
-        // --- BLE CONNECT / RECONNECT HANDLER (CHUNKING 15 BYTE) ---
-        async function connectBLE() {
-            const ssid = document.getElementById('ssid').value.trim();
-            const password = document.getElementById('password').value.trim();
-            const statusDiv = document.getElementById('ble-status');
-
-            if (!ssid) return alert("Isi SSID Wi-Fi terlebih dahulu!");
-
             try {
-                statusDiv.innerText = "Mencari & Menghubungkan BLE...";
-                const device = await navigator.bluetooth.requestDevice({
-                    filters: [{ name: 'ESP32_Maling_Detector' }],
-                    optionalServices: [BLE_SVC_UUID]
-                });
-
-                const server = await device.gatt.connect();
-                const service = await server.getPrimaryService(BLE_SVC_UUID);
-                const rxChar = await service.getCharacteristic(BLE_RX_UUID);
-
-                const payload = JSON.stringify({ ssid: ssid, pass: password });
-                statusDiv.innerText = "Mengirim Kredensial (Chunking)...";
-
-                const CHUNK_SIZE = 15;
-                const encoder = new TextEncoder();
-                const dataBytes = encoder.encode(payload);
-
-                for (let i = 0; i < dataBytes.length; i += CHUNK_SIZE) {
-                    const chunk = dataBytes.slice(i, i + CHUNK_SIZE);
-                    await rxChar.writeValue(chunk);
-                    await new Promise(resolve => setTimeout(resolve, 50));
+                const padding = '='.repeat((4 - base64String.length % 4) % 4);
+                const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
+                const rawData = window.atob(base64);
+                const outputArray = new Uint8Array(rawData.length);
+                for (let i = 0; i < rawData.length; ++i) {
+                    outputArray[i] = rawData.charCodeAt(i);
                 }
-
-                statusDiv.innerText = "✅ Wi-Fi Terkirim ke ESP32!";
-                statusDiv.style.color = "#28a745";
-            } catch (err) {
-                console.error("BLE Error:", err);
-                statusDiv.innerText = "❌ Gagal Koneksi BLE";
-                statusDiv.style.color = "#dc3545";
+                return outputArray;
+            } catch (e) {
+                throw new Error(`Format VAPID Key Tidak Valid (Base64 Decode Error): ${e.message}`);
             }
         }
 
-        // --- COMMAND KONTROL ---
-        async function sendCommand(cmd) {
-            const statusDiv = document.getElementById('system-status');
-            if (cmd === 'ADAPT') {
-                statusDiv.innerText = "⏳ Sedang Pengumpulan Data & Training...";
-                statusDiv.style.color = "#ffc107";
-            }
-
-            try {
-                await fetch(`${SERVER_URL}/api/set_command`, {
-                    method: 'POST',
-                    headers: NGROK_HEADERS,
-                    body: JSON.stringify({ command: cmd })
-                });
-
-                if (cmd !== 'ADAPT') {
-                    statusDiv.innerText = `Status: ${cmd}`;
-                    statusDiv.style.color = "#17a2b8";
-                }
-            } catch (err) {
-                alert("Gagal terhubung ke Server");
-            }
-        }
+        // Inisialisasi Otomatis Saat Page Load
+        window.addEventListener('DOMContentLoaded', () => {
+            checkEnvironment();
+        });
     </script>
 </body>
 </html>
