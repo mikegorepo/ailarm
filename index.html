@@ -44,12 +44,12 @@
         <div id="ble-status" class="status">BLE Disconnected</div>
     </div>
 
-    <!-- Section 3: Adaptation & Control via BLE -->
+    <!-- Section 3: Adaptation & Control via Server / BLE -->
     <div class="card">
-        <h3>🛡️ Kontrol Monitoring (Direct BLE)</h3>
-        <button class="btn-adapt" onclick="sendBLECommand('ADAPT')">🔄 Adaptasi Data & Train Model</button>
-        <button class="btn-start" onclick="sendBLECommand('START')">🛡️ Nyalakan Sistem (Arm)</button>
-        <button class="btn-stop" onclick="sendBLECommand('STOP')">🛑 Matikan Sistem (Disarm)</button>
+        <h3>🛡️ Kontrol Monitoring System</h3>
+        <button class="btn-adapt" onclick="sendCommand('ADAPT')">🔄 Adaptasi Data & Train Model</button>
+        <button class="btn-start" onclick="sendCommand('START')">🛡️ Nyalakan Sistem (Arm)</button>
+        <button class="btn-stop" onclick="sendCommand('STOP')">🛑 Matikan Sistem (Disarm)</button>
         <div id="system-status" class="status">Status: IDLE</div>
     </div>
 
@@ -63,7 +63,7 @@
             'ngrok-skip-browser-warning': 'true'
         };
 
-        // Global Variable untuk menyimpan sesi BLE
+        // Global Variable BLE
         let bleDevice = null;
         let bleRxCharacteristic = null;
 
@@ -73,6 +73,7 @@
                 try {
                     await navigator.serviceWorker.register('./sw.js');
                     checkCurrentSubscription();
+                    autoReconnectBLE(); // Mencoba auto-reconnect perangkat BLE yang pernah di-pair
                 } catch (err) {
                     console.error("Gagal Registrasi SW:", err);
                 }
@@ -113,7 +114,6 @@
                 }
 
                 const reg = await navigator.serviceWorker.ready;
-
                 const keyRes = await fetch(`${SERVER_URL}/api/vapid_public_key`, { headers: NGROK_HEADERS });
                 const keyData = await keyRes.json();
 
@@ -158,7 +158,6 @@
                         headers: NGROK_HEADERS,
                         body: JSON.stringify(sub)
                     });
-
                     await sub.unsubscribe();
                 }
 
@@ -170,7 +169,7 @@
             }
         }
 
-        // --- HELPER UNTUK MEMBUKA KONEKSI BLE ---
+        // --- HELPER KONEKSI BLE ---
         async function ensureBLEConnected() {
             const statusDiv = document.getElementById('ble-status');
 
@@ -201,7 +200,29 @@
             return true;
         }
 
-        // Connect BLE tanpa kirim data Wi-Fi
+        // Auto-reconnect jika browser menyimpan izin perangkat sebelumnya
+        async function autoReconnectBLE() {
+            if (navigator.bluetooth && navigator.bluetooth.getDevices) {
+                try {
+                    const devices = await navigator.bluetooth.getDevices();
+                    const pairedDevice = devices.find(d => d.name === 'ESP32_Maling_Detector');
+                    if (pairedDevice) {
+                        console.log("Menemukan perangkat Bluetooth tersimpan, mencoba menghubungkan...");
+                        bleDevice = pairedDevice;
+                        // Penanganan reconnect halus tanpa memblokir UI
+                        const server = await bleDevice.gatt.connect();
+                        const service = await server.getPrimaryService(BLE_SVC_UUID);
+                        bleRxCharacteristic = await service.getCharacteristic(BLE_RX_UUID);
+                        
+                        document.getElementById('ble-status').innerText = "🟢 BLE Reconnected Otomatis";
+                        document.getElementById('ble-status').style.color = "#28a745";
+                    }
+                } catch (err) {
+                    console.log("Auto-reconnect BLE dilewati:", err);
+                }
+            }
+        }
+
         async function connectBLEOnly() {
             try {
                 await ensureBLEConnected();
@@ -212,7 +233,7 @@
             }
         }
 
-        // --- KIRM KREDENSIAL WI-FI VIA BLE ---
+        // --- KIRIM KREDENSIAL WI-FI VIA BLE ---
         async function connectBLEAndSendWifi() {
             const ssid = document.getElementById('ssid').value.trim();
             const password = document.getElementById('password').value.trim();
@@ -237,35 +258,54 @@
             }
         }
 
-        // --- PERINTAH KONTROL LANGSUNG VIA BLE ---
-        async function sendBLECommand(cmd) {
+        // --- PERBAIKAN: KONTROL DUA JALUR (HYBRID BLE + BACKEND HTTP) ---
+        async function sendCommand(cmd) {
             const statusDiv = document.getElementById('system-status');
+            statusDiv.innerText = `⏳ Memproses perintah ${cmd}...`;
+            statusDiv.style.color = "#ffc107";
 
-            try {
-                // Pastikan koneksi BLE aktif sebelum mengirim perintah
-                await ensureBLEConnected();
+            let bleSuccess = false;
 
-                if (cmd === 'ADAPT') {
-                    statusDiv.innerText = "⏳ Sedang Meminta Adaptasi (BLE)...";
-                    statusDiv.style.color = "#ffc107";
+            // 1. Coba kirim via BLE dulu jika terhubung
+            if (bleDevice && bleDevice.gatt.connected && bleRxCharacteristic) {
+                try {
+                    const payload = JSON.stringify({ command: cmd });
+                    await sendRawBytesBLE(payload);
+                    bleSuccess = true;
+                    console.log(`✅ Command ${cmd} terkirim via BLE`);
+                } catch (err) {
+                    console.warn("Gagal kirim via BLE, mencoba via HTTP Server...", err);
                 }
+            }
 
-                // Kirim perintah sebagai JSON, misal: {"command": "ADAPT"}
-                const payload = JSON.stringify({ command: cmd });
-                await sendRawBytesBLE(payload);
+            // 2. Kirim juga ke HTTP Server Backend agar status tersinkronisasi
+            try {
+                const res = await fetch(`${SERVER_URL}/api/set_command`, {
+                    method: 'POST',
+                    headers: NGROK_HEADERS,
+                    body: JSON.stringify({ command: cmd })
+                });
+                const resData = await res.json();
 
-                statusDiv.innerText = `Status: Command ${cmd} Terkirim via BLE`;
-                statusDiv.style.color = "#28a745";
-
+                if (resData.status === "OK") {
+                    statusDiv.innerText = `✅ Perintah ${cmd} Berhasil Dikirim!`;
+                    statusDiv.style.color = "#28a745";
+                } else {
+                    throw new Error("Respon Server Gagal");
+                }
             } catch (err) {
-                console.error("Gagal Kirim Command BLE:", err);
-                alert("Gagal mengirim perintah via BLE: " + err.message);
-                statusDiv.innerText = "❌ Gagal Kirim Perintah";
-                statusDiv.style.color = "#dc3545";
+                console.error("Gagal Kirim Command ke Server:", err);
+                if (bleSuccess) {
+                    statusDiv.innerText = `✅ Command ${cmd} Terkirim via BLE saja`;
+                    statusDiv.style.color = "#28a745";
+                } else {
+                    statusDiv.innerText = `❌ Gagal Kirim Command (${cmd})`;
+                    statusDiv.style.color = "#dc3545";
+                }
             }
         }
 
-        // --- HELPER UNTUK KIRIM DATA CHUNKING VIA BLE ---
+        // --- HELPER CHUNKING DATA BLE ---
         async function sendRawBytesBLE(dataString) {
             if (!bleRxCharacteristic) throw new Error("Karakteristik BLE tidak tersedia");
 
