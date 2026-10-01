@@ -59,33 +59,40 @@
         }
 
         async function connectBLE() {
-            const ssid = document.getElementById('ssid').value;
-            const password = document.getElementById('password').value;
-            const statusDiv = document.getElementById('ble-status');
+    const ssid = document.getElementById('ssid').value.trim();
+    const password = document.getElementById('password').value.trim();
+    const statusDiv = document.getElementById('ble-status');
 
-            if (!ssid) return alert("Isi SSID Wi-Fi terlebih dahulu!");
+    if (!ssid) return alert("Isi SSID Wi-Fi terlebih dahulu!");
 
-            try {
-                statusDiv.innerText = "Mencari ESP32...";
-                const device = await navigator.bluetooth.requestDevice({
-                    filters: [{ name: 'ESP32_Maling_Detector' }],
-                    optionalServices: [BLE_SVC_UUID]
-                });
+    try {
+        statusDiv.innerText = "Mencari ESP32...";
+        const device = await navigator.bluetooth.requestDevice({
+            filters: [{ name: 'ESP32_Maling_Detector' }],
+            optionalServices: [BLE_SVC_UUID]
+        });
 
-                statusDiv.innerText = "Menghubungkan BLE...";
-                const server = await device.gatt.connect();
-                const service = await server.getPrimaryService(BLE_SVC_UUID);
-                const rxChar = await service.getCharacteristic(BLE_RX_UUID);
+        statusDiv.innerText = "Menghubungkan BLE...";
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(BLE_SVC_UUID);
+        const rxChar = await service.getCharacteristic(BLE_RX_UUID);
 
-                const payload = JSON.stringify({ ssid: ssid, pass: password });
-                await rxChar.writeValue(new TextEncoder().encode(payload));
+        // Buat JSON string yang ringkas
+        const payload = JSON.stringify({ ssid: ssid, pass: password });
+        
+        console.log("Mengirim Payload:", payload);
+        statusDiv.innerText = "Mengirim Kredensial...";
 
-                statusDiv.innerText = "✅ Kredensial Wi-Fi Terkirim!";
-            } catch (err) {
-                console.error(err);
-                statusDiv.innerText = "❌ Gagal koneksi BLE";
-            }
-        }
+        // Kirim data sebagai Uint8Array
+        const encoder = new TextEncoder();
+        await rxChar.writeValue(encoder.encode(payload));
+
+        statusDiv.innerText = "✅ Kredensial Wi-Fi Terkirim!";
+    } catch (err) {
+        console.error("BLE Error:", err);
+        statusDiv.innerText = "❌ Gagal koneksi BLE";
+    }
+}
 
         async function sendCommand(cmd) {
             try {
