@@ -95,6 +95,19 @@
             }
         }
 
+        // Tambahkan di index.html, BUKAN menggantikan sw.js
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', async () => {
+                try {
+                    // Jalankan registrasi ke file ./sw.js
+                    const reg = await navigator.serviceWorker.register('./sw.js');
+                    log(`Service Worker Berhasil Terdaftar di GitHub! Scope: ${reg.scope}`, 'success');
+                } catch (err) {
+                    log(`Gagal Registrasi Service Worker: ${err.message}`, 'error');
+                }
+            });
+        }
+
         // --- SUBSCRIBE PUSH FUNCTION ---
         async function subscribePush() {
             const statusDiv = document.getElementById('push-status');
