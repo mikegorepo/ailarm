@@ -16,9 +16,15 @@
         .btn-adapt { background: #ffc107; color: black; }
         .btn-start { background: #28a745; color: white; }
         .btn-stop { background: #dc3545; color: white; }
+        .btn-clear { background: #343a40; color: white; font-size: 12px; padding: 6px; width: auto; float: right; margin-bottom: 5px; }
         input { width: 90%; padding: 10px; margin: 6px 0; border-radius: 6px; border: 1px solid #333; background: #2a2a2a; color: white; text-align: center; }
         .status { margin-top: 10px; font-weight: bold; color: #17a2b8; font-size: 14px; }
         .badge { display: inline-block; background: #28a745; color: #fff; font-size: 11px; padding: 4px 10px; border-radius: 10px; margin-bottom: 10px; }
+        
+        /* Style untuk Terminal Log */
+        .terminal-card { max-width: 450px; text-align: left; }
+        .terminal { background: #000; color: #00ff66; font-family: 'Courier New', Courier, monospace; font-size: 12px; padding: 10px; border-radius: 6px; height: 180px; overflow-y: auto; border: 1px solid #333; white-space: pre-wrap; word-break: break-all; }
+        .terminal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
     </style>
 </head>
 <body>
@@ -53,19 +59,41 @@
         <div id="system-status" class="status">Status: IDLE</div>
     </div>
 
+    <!-- Section 4: Live Terminal Log ESP32 -->
+    <div class="card terminal-card">
+        <div class="terminal-header">
+            <strong>💻 Live Terminal Log</strong>
+            <button class="btn-clear" onclick="clearTerminal()">Clear</button>
+        </div>
+        <div id="terminal-box" class="terminal">[System] Terminal siap. Menghubungkan perangkat...</div>
+    </div>
+
     <script>
         const SERVER_URL = "https://uninured-centrifugally-marjorie.ngrok-free.app";
         const BLE_SVC_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
         const BLE_RX_UUID  = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+        const BLE_TX_UUID  = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"; // UUID untuk Notify/Log dari ESP32
 
         const NGROK_HEADERS = {
             'Content-Type': 'application/json',
             'ngrok-skip-browser-warning': 'true'
         };
 
-        // Global Variable BLE
         let bleDevice = null;
         let bleRxCharacteristic = null;
+        let bleTxCharacteristic = null;
+
+        // --- FUNGSI LOGGER KE TERMINAL PWA ---
+        function appendLog(message) {
+            const term = document.getElementById('terminal-box');
+            const timestamp = new Date().toLocaleTimeString();
+            term.innerText += `\n[${timestamp}] ${message}`;
+            term.scrollTop = term.scrollHeight; // Auto scroll ke bawah
+        }
+
+        function clearTerminal() {
+            document.getElementById('terminal-box').innerText = "[System] Terminal dibersihkan.";
+        }
 
         // --- REGISTRASI SERVICE WORKER ---
         if ('serviceWorker' in navigator) {
@@ -73,9 +101,9 @@
                 try {
                     await navigator.serviceWorker.register('./sw.js');
                     checkCurrentSubscription();
-                    autoReconnectBLE(); // Mencoba auto-reconnect perangkat BLE yang pernah di-pair
+                    autoReconnectBLE();
                 } catch (err) {
-                    console.error("Gagal Registrasi SW:", err);
+                    appendLog("Gagal Registrasi SW: " + err);
                 }
             });
         }
@@ -94,7 +122,7 @@
                     statusDiv.style.color = "#17a2b8";
                 }
             } catch (e) {
-                console.error("Check sub error:", e);
+                appendLog("Check sub error: " + e);
             }
         }
 
@@ -103,6 +131,7 @@
             const statusDiv = document.getElementById('push-status');
             statusDiv.innerText = "⏳ Mendaftarkan...";
             statusDiv.style.color = "#ffc107";
+            appendLog("Memulai proses subscribe push notification...");
 
             try {
                 const perm = await Notification.requestPermission();
@@ -137,11 +166,11 @@
 
                 statusDiv.innerText = "✅ HP Berhasil Terdaftar Notifikasi!";
                 statusDiv.style.color = "#28a745";
+                appendLog("Berhasil subscribe push notification server.");
             } catch (err) {
-                console.error("Gagal Subscribe:", err);
+                appendLog("Gagal Subscribe: " + err.message);
                 statusDiv.innerText = "❌ Gagal Subscribe";
                 statusDiv.style.color = "#dc3545";
-                alert("Gagal subscribe: " + err.message);
             }
         }
 
@@ -163,13 +192,13 @@
 
                 statusDiv.innerText = "🔕 Berhasil Unsubscribe!";
                 statusDiv.style.color = "#6c757d";
+                appendLog("Berhasil unsubscribe push notification.");
             } catch (err) {
-                console.error("Gagal Unsubscribe:", err);
-                alert("Gagal unsubscribe: " + err.message);
+                appendLog("Gagal Unsubscribe: " + err.message);
             }
         }
 
-        // --- HELPER KONEKSI BLE ---
+        // --- HELPER KONEKSI BLE & LISTEN NOTIFY (LOG ESP32) ---
         async function ensureBLEConnected() {
             const statusDiv = document.getElementById('ble-status');
 
@@ -179,6 +208,7 @@
 
             statusDiv.innerText = "Mencari & Menghubungkan BLE...";
             statusDiv.style.color = "#ffc107";
+            appendLog("Membuka dialog pemindaian BLE...");
 
             bleDevice = await navigator.bluetooth.requestDevice({
                 filters: [{ name: 'ESP32_Maling_Detector' }],
@@ -189,33 +219,57 @@
                 statusDiv.innerText = "🔴 BLE Disconnected";
                 statusDiv.style.color = "#dc3545";
                 bleRxCharacteristic = null;
+                bleTxCharacteristic = null;
+                appendLog("❌ Koneksi BLE terputus.");
             });
 
             const server = await bleDevice.gatt.connect();
             const service = await server.getPrimaryService(BLE_SVC_UUID);
             bleRxCharacteristic = await service.getCharacteristic(BLE_RX_UUID);
+            
+            // Mengambil karakteristik TX untuk mendengarkan log/notifikasi dari ESP32 (jika di-enable di firmware)
+            try {
+                bleTxCharacteristic = await service.getCharacteristic(BLE_TX_UUID);
+                await bleTxCharacteristic.startNotifications();
+                bleTxCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
+                    const value = new TextDecoder().decode(event.target.value);
+                    appendLog(`[ESP32] ${value.trim()}`);
+                });
+                appendLog("Berhasil mengaktifkan listener BLE TX (Log Stream).");
+            } catch (e) {
+                appendLog("Catatan: BLE TX Notify belum aktif di ESP32 (" + e.message + ")");
+            }
 
             statusDiv.innerText = "🟢 BLE Terhubung";
             statusDiv.style.color = "#28a745";
+            appendLog("🟢 Terhubung ke ESP32 via BLE.");
             return true;
         }
 
-        // Auto-reconnect jika browser menyimpan izin perangkat sebelumnya
         async function autoReconnectBLE() {
             if (navigator.bluetooth && navigator.bluetooth.getDevices) {
                 try {
                     const devices = await navigator.bluetooth.getDevices();
                     const pairedDevice = devices.find(d => d.name === 'ESP32_Maling_Detector');
                     if (pairedDevice) {
-                        console.log("Menemukan perangkat Bluetooth tersimpan, mencoba menghubungkan...");
+                        appendLog("Menemukan perangkat Bluetooth tersimpan, mencoba menghubungkan...");
                         bleDevice = pairedDevice;
-                        // Penanganan reconnect halus tanpa memblokir UI
                         const server = await bleDevice.gatt.connect();
                         const service = await server.getPrimaryService(BLE_SVC_UUID);
                         bleRxCharacteristic = await service.getCharacteristic(BLE_RX_UUID);
                         
+                        try {
+                            bleTxCharacteristic = await service.getCharacteristic(BLE_TX_UUID);
+                            await bleTxCharacteristic.startNotifications();
+                            bleTxCharacteristic.addEventListener('characteristicvaluechanged', (event) => {
+                                const value = new TextDecoder().decode(event.target.value);
+                                appendLog(`[ESP32] ${value.trim()}`);
+                            });
+                        } catch (e) {}
+
                         document.getElementById('ble-status').innerText = "🟢 BLE Reconnected Otomatis";
                         document.getElementById('ble-status').style.color = "#28a745";
+                        appendLog("🟢 Auto-reconnected ke ESP32.");
                     }
                 } catch (err) {
                     console.log("Auto-reconnect BLE dilewati:", err);
@@ -227,7 +281,7 @@
             try {
                 await ensureBLEConnected();
             } catch (err) {
-                console.error("BLE Connect Error:", err);
+                appendLog("BLE Connect Error: " + err);
                 document.getElementById('ble-status').innerText = "❌ Gagal Koneksi BLE";
                 document.getElementById('ble-status').style.color = "#dc3545";
             }
@@ -246,39 +300,40 @@
 
                 const payload = JSON.stringify({ ssid: ssid, pass: password });
                 statusDiv.innerText = "Mengirim Kredensial Wi-Fi...";
+                appendLog(`Mengirim kredensial Wi-Fi untuk SSID: ${ssid}`);
 
                 await sendRawBytesBLE(payload);
 
                 statusDiv.innerText = "✅ Wi-Fi Terkirim ke ESP32!";
                 statusDiv.style.color = "#28a745";
+                appendLog("✅ Kredensial Wi-Fi berhasil dikirim ke ESP32.");
             } catch (err) {
-                console.error("BLE Wi-Fi Error:", err);
+                appendLog("BLE Wi-Fi Error: " + err);
                 statusDiv.innerText = "❌ Gagal Kirim Wi-Fi";
                 statusDiv.style.color = "#dc3545";
             }
         }
 
-        // --- PERBAIKAN: KONTROL DUA JALUR (HYBRID BLE + BACKEND HTTP) ---
+        // --- KONTROL SISTEM ---
         async function sendCommand(cmd) {
             const statusDiv = document.getElementById('system-status');
             statusDiv.innerText = `⏳ Memproses perintah ${cmd}...`;
             statusDiv.style.color = "#ffc107";
+            appendLog(`Mengirim perintah kontrol: ${cmd}`);
 
             let bleSuccess = false;
 
-            // 1. Coba kirim via BLE dulu jika terhubung
             if (bleDevice && bleDevice.gatt.connected && bleRxCharacteristic) {
                 try {
                     const payload = JSON.stringify({ command: cmd });
                     await sendRawBytesBLE(payload);
                     bleSuccess = true;
-                    console.log(`✅ Command ${cmd} terkirim via BLE`);
+                    appendLog(`✅ Command ${cmd} terkirim via BLE`);
                 } catch (err) {
-                    console.warn("Gagal kirim via BLE, mencoba via HTTP Server...", err);
+                    appendLog("Gagal kirim via BLE, mencoba via HTTP Server... (" + err + ")");
                 }
             }
 
-            // 2. Kirim juga ke HTTP Server Backend agar status tersinkronisasi
             try {
                 const res = await fetch(`${SERVER_URL}/api/set_command`, {
                     method: 'POST',
@@ -290,22 +345,22 @@
                 if (resData.status === "OK") {
                     statusDiv.innerText = `✅ Perintah ${cmd} Berhasil Dikirim!`;
                     statusDiv.style.color = "#28a745";
+                    appendLog(`✅ Perintah ${cmd} diterima backend server.`);
                 } else {
                     throw new Error("Respon Server Gagal");
                 }
             } catch (err) {
-                console.error("Gagal Kirim Command ke Server:", err);
                 if (bleSuccess) {
                     statusDiv.innerText = `✅ Command ${cmd} Terkirim via BLE saja`;
                     statusDiv.style.color = "#28a745";
                 } else {
                     statusDiv.innerText = `❌ Gagal Kirim Command (${cmd})`;
                     statusDiv.style.color = "#dc3545";
+                    appendLog(`❌ Gagal kirim command ${cmd}: ${err}`);
                 }
             }
         }
 
-        // --- HELPER CHUNKING DATA BLE ---
         async function sendRawBytesBLE(dataString) {
             if (!bleRxCharacteristic) throw new Error("Karakteristik BLE tidak tersedia");
 
@@ -320,7 +375,6 @@
             }
         }
 
-        // --- HELPER BASE64 CONVERTER ---
         function urlBase64ToUint8Array(base64String) {
             const padding = '='.repeat((4 - base64String.length % 4) % 4);
             const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
