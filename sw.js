@@ -11,7 +11,7 @@ self.addEventListener('push', function(event) {
 
     const options = {
         body: data.body,
-        icon: '/icon-192.png', // <-- Diganti ke icon lokal
+        icon: './icon-192.png', // <-- Diganti ke icon lokal
         vibrate: [300, 100, 300, 100, 300],
         tag: 'maling-warning',
         renotify: true
