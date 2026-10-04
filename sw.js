@@ -11,7 +11,8 @@ self.addEventListener('push', function(event) {
 
     const options = {
         body: data.body,
-        icon: './icon-192.png', // <-- Diganti ke icon lokal
+        icon: './icon-192.png',
+        badge: './icon-192.png',
         vibrate: [300, 100, 300, 100, 300],
         tag: 'maling-warning',
         renotify: true
@@ -19,5 +20,13 @@ self.addEventListener('push', function(event) {
 
     event.waitUntil(
         self.registration.showNotification(data.title, options)
+    );
+});
+
+// Event ketika notifikasi diklik user
+self.addEventListener('notificationclick', function(event) {
+    event.notification.close();
+    event.waitUntil(
+        clients.openWindow('/')
     );
 });
