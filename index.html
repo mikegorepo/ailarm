@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ESP32 Security Center</title>
 
-    <!-- TAMBAHKAN 2 BARIS INI FOR PWA -->
     <link rel="manifest" href="./manifest.json">
     <meta name="theme-color" content="#121212">
     
@@ -25,7 +24,6 @@
         .status { margin-top: 10px; font-weight: bold; color: #17a2b8; font-size: 14px; }
         .badge { display: inline-block; background: #28a745; color: #fff; font-size: 11px; padding: 4px 10px; border-radius: 10px; margin-bottom: 10px; }
         
-        /* Style untuk Terminal Log */
         .terminal-card { max-width: 450px; text-align: left; }
         .terminal { background: #000; color: #00ff66; font-family: 'Courier New', Courier, monospace; font-size: 12px; padding: 10px; border-radius: 6px; height: 180px; overflow-y: auto; border: 1px solid #333; white-space: pre-wrap; word-break: break-all; }
         .terminal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
@@ -44,7 +42,7 @@
         <div id="push-status" class="status">Status Push: Menunggu Aksi...</div>
     </div>
 
-    <!-- Section 2: Bluetooth Setup (Hanya untuk kirim Wi-Fi awal) -->
+    <!-- Section 2: Bluetooth Setup -->
     <div class="card">
         <h3>📶 Wi-Fi Provisioning via BLE</h3>
         <input type="text" id="ssid" placeholder="Nama Wi-Fi (SSID)">
@@ -62,7 +60,7 @@
         <div id="system-status" class="status">Status: IDLE</div>
     </div>
 
-    <!-- Section 4: Live Terminal Log ESP32 (via Server Polling) -->
+    <!-- Section 4: Live Terminal Log ESP32 -->
     <div class="card terminal-card">
         <div class="terminal-header">
             <strong>💻 Live Terminal Log (Wi-Fi)</strong>
@@ -84,7 +82,6 @@
         let bleDevice = null;
         let bleRxCharacteristic = null;
 
-        // --- FUNGSI LOGGER KE TERMINAL PWA ---
         function appendLocalLog(message) {
             const term = document.getElementById('terminal-box');
             const timestamp = new Date().toLocaleTimeString();
@@ -96,7 +93,7 @@
             document.getElementById('terminal-box').innerText = "[System] Terminal dibersihkan.";
         }
 
-        // --- POLLING LOG DARI SERVER SETIAP 1.5 DETIK ---
+        // --- POLLING LOG DARI SERVER ---
         setInterval(async () => {
             try {
                 const res = await fetch(`${SERVER_URL}/api/get_logs`, { headers: NGROK_HEADERS });
@@ -106,9 +103,7 @@
                     term.innerText = data.logs.join("\n");
                     term.scrollTop = term.scrollHeight;
                 }
-            } catch (e) {
-                // Abaikan jika jaringan terputus sementara
-            }
+            } catch (e) {}
         }, 1500);
 
         // --- REGISTRASI SERVICE WORKER ---
@@ -141,7 +136,7 @@
             }
         }
 
-        // --- SUBSCRIBE PUSH NOTIFICATION ---
+        // --- SUBSCRIBE PUSH NOTIFICATION (FIXED) ---
         async function subscribePush() {
             const statusDiv = document.getElementById('push-status');
             statusDiv.innerText = "⏳ Mendaftarkan...";
@@ -160,26 +155,33 @@
                 const keyRes = await fetch(`${SERVER_URL}/api/vapid_public_key`, { headers: NGROK_HEADERS });
                 const keyData = await keyRes.json();
 
-                if (!keyData.public_key) throw new Error("VAPID Public Key tidak ditemukan");
+                if (!keyData.public_key) throw new Error("VAPID Public Key tidak ditemukan dari server");
 
                 const convertedKey = urlBase64ToUint8Array(keyData.public_key);
 
+                // Buat pendaftaran fresh
                 let sub = await reg.pushManager.getSubscription();
-                if (!sub) {
-                    sub = await reg.pushManager.subscribe({
-                        userVisibleOnly: true,
-                        applicationServerKey: convertedKey
-                    });
+                if (sub) {
+                    await sub.unsubscribe(); // Hapus pendaftaran lama agar tidak mismatch VAPID key
                 }
 
-                await fetch(`${SERVER_URL}/api/subscribe`, {
+                sub = await reg.pushManager.subscribe({
+                    userVisibleOnly: true,
+                    applicationServerKey: convertedKey
+                });
+
+                // Kirim subscription object lengkap ke server Flask
+                const resp = await fetch(`${SERVER_URL}/api/subscribe`, {
                     method: 'POST',
                     headers: NGROK_HEADERS,
                     body: JSON.stringify(sub)
                 });
 
+                if (!resp.ok) throw new Error("Server menolak menyimpan subscription");
+
                 statusDiv.innerText = "✅ HP Berhasil Terdaftar Notifikasi!";
                 statusDiv.style.color = "#28a745";
+                appendLocalLog("✅ Push Subscription berhasil dikirim ke server Flask.");
             } catch (err) {
                 appendLocalLog("Gagal Subscribe: " + err.message);
                 statusDiv.innerText = "❌ Gagal Subscribe";
@@ -210,7 +212,7 @@
             }
         }
 
-        // --- KONEKSI BLE UNTUK KIRIM WI-FI AWAL ---
+        // --- KONEKSI BLE UNTUK WI-FI ---
         async function connectBLEAndSendWifi() {
             const ssid = document.getElementById('ssid').value.trim();
             const password = document.getElementById('password').value.trim();
@@ -234,7 +236,6 @@
                 const payload = JSON.stringify({ ssid: ssid, pass: password });
                 statusDiv.innerText = "Mengirim Kredensial Wi-Fi...";
 
-                // Kirim data secara chunk (aman dari limit MTU)
                 const CHUNK_SIZE = 15;
                 const encoder = new TextEncoder();
                 const dataBytes = encoder.encode(payload);
@@ -247,7 +248,7 @@
 
                 statusDiv.innerText = "✅ Kredensial Wi-Fi Terkirim!";
                 statusDiv.style.color = "#28a745";
-                appendLocalLog("✅ Kredensial Wi-Fi dikirim via BLE. ESP32 akan beralih ke Wi-Fi.");
+                appendLocalLog("✅ Kredensial Wi-Fi dikirim via BLE.");
             } catch (err) {
                 appendLocalLog("BLE Error: " + err);
                 statusDiv.innerText = "❌ Gagal Kirim Wi-Fi";
@@ -283,11 +284,16 @@
             }
         }
 
+        // --- FUNGSI BASE64 DECODER YANG LEBIH AMAN (FIXED) ---
         function urlBase64ToUint8Array(base64String) {
-            const padding = '='.repeat((4 - base64String.length % 4) % 4);
-            const base64 = (base64String + padding).replace(/\-/g, '+').replace(/_/g, '/');
+            const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+            const base64 = (base64String + padding)
+                .replace(/-/g, '+')
+                .replace(/_/g, '/');
+
             const rawData = window.atob(base64);
             const outputArray = new Uint8Array(rawData.length);
+
             for (let i = 0; i < rawData.length; ++i) {
                 outputArray[i] = rawData.charCodeAt(i);
             }
