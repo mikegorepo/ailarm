@@ -2,12 +2,16 @@
 self.addEventListener('push', function(event) {
     let data = { title: "🚨 ALERT!", body: "Gerakan mencurigakan terdeteksi!" };
     if (event.data) {
-        data = event.data.json();
+        try {
+            data = event.data.json();
+        } catch (e) {
+            data = { title: "🚨 ALERT!", body: event.data.text() };
+        }
     }
 
     const options = {
         body: data.body,
-        icon: 'https://via.placeholder.com/128/ff0000/ffffff?text=ALERT',
+        icon: '/icon-192.png', // <-- Diganti ke icon lokal
         vibrate: [300, 100, 300, 100, 300],
         tag: 'maling-warning',
         renotify: true
